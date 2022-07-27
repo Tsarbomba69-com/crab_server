@@ -58,7 +58,7 @@ impl App {
         }
     }
 
-    fn handle_connection(&self, mut stream: Box<TcpStream>) {
+    fn handle_connection(&self, mut stream: TcpStream) {
         let mut buffer = [0; 1024];
         let mut request_line: String = String::new();
         let mut body: String = String::new();
@@ -73,8 +73,8 @@ impl App {
         let vec: Vec<&str> = request_line.split(" ").collect();
 
         let req: Request = Request {
-            method: vec[0],
-            uri: vec[1],
+            method: vec[0].clone(),
+            uri: vec[1].clone(),
             http_version: vec[2].clone(),
             headers: headers.clone(),
             body: App::parse_body(body),
@@ -82,24 +82,40 @@ impl App {
             ip: "127.0.0.1",
         };
 
-        let res = self.routes.get(req.uri).unwrap()(req);
-        let res_buffer = format!(
-            "{} {} {}\r\nContent-Length: {}\r\n\r\n{}",
-            vec[2],
-            res.status_code,
-            res.reason_phrase,
-            res.content_length,
-            res.contents.as_str()
-        );
-        stream.write_all(res_buffer.as_bytes());
-        println!("Request: {}", String::from_utf8_lossy(&buffer[..]));
+        let k = format!("{} {}", req.method, req.uri);
+        // TODO: handle serving static files 
+        match self.routes.get(k.as_str()) {
+            None => println!("Not found!"),
+            Some(callback) => {
+                let res = callback(req);
+                let res_buffer = format!(
+                    "{} {} {}\r\nRequest: Content-Length: {}\r\n\r\n{}",
+                    vec[2],
+                    res.status_code,
+                    res.reason_phrase,
+                    res.content_length,
+                    res.contents.as_str()
+                );
+
+                match stream.write_all(res_buffer.as_bytes()) {
+                    Ok(()) => println!(
+                        "Response: {} {} {} {}",
+                        vec[0], vec[1], res.status_code, res.reason_phrase
+                    ),
+                    Err(e) => println!("Error: {}", e),
+                };
+            }
+        }
+
+        stream.flush();
     }
 
     fn parse_request(buffer: &[u8]) -> (HashMap<String, String>, String, String) {
         let request_msg = String::from_utf8(buffer.to_vec()).unwrap();
         let mut headers: HashMap<String, String> = HashMap::new();
         let request_line = request_msg.lines().nth(0).unwrap().to_string();
-        let index: usize = request_msg.find("\r\n\r\n").unwrap();
+        let index: usize = request_msg.find("\r\n\r\n").unwrap_or(0);
+
         let body = request_msg
             .get(index..request_msg.len())
             .unwrap_or_default();
@@ -145,11 +161,9 @@ impl App {
 
                 for stream in listener.incoming() {
                     match stream {
-                        Ok(stream) => self.handle_connection(Box::new(stream)),
+                        Ok(stream) => self.handle_connection(stream),
                         Err(e) => println!("Error: {}", e),
                     }
-
-                    println!("Connection established!");
                 }
             }
             Err(e) => println!("ERROR: {:?}", e),
@@ -157,6 +171,6 @@ impl App {
     }
 
     pub fn get(&mut self, uri: &str, callback: fn(req: Request) -> Response) -> () {
-        self.routes.insert(uri.to_string(), callback);
+        self.routes.insert(format!("GET {}", uri), callback);
     }
 }
