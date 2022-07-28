@@ -30,7 +30,7 @@ pub struct Response<'a> {
     headers: HashMap<String, String>,
     content_type: &'a str,
     content_length: usize,
-    contents: String,
+    contents: Vec<u8>,
 }
 
 pub fn render(view: &str) -> Response {
@@ -45,7 +45,7 @@ pub fn render(view: &str) -> Response {
         headers: HashMap::new(),
         content_type: "text/plain",
         content_length: html.len(),
-        contents: html,
+        contents: html.into_bytes(),
     }
 }
 
@@ -59,17 +59,18 @@ fn get_file(uri: &str) -> Result<Vec<u8>, Error> {
 
 fn send(res: Response, mut stream: &TcpStream) {
     let res_buffer = format!(
-        "HTTP/1.1 {} {}\r\nRequest: Content-Length: {}\r\n\r\n{}",
+        "HTTP/1.1 {} {}\r\nRequest: Content-Length: {}\r\n\r\n",
         res.status_code,
         res.reason_phrase,
-        res.content_length,
-        res.contents.as_str()
+        res.content_length
     );
 
     match stream.write_all(res_buffer.as_bytes()) {
         Ok(()) => println!("\nResponse: {} {}", res.status_code, res.reason_phrase),
         Err(e) => println!("Error: {}", e),
     };
+
+    stream.write_all(res.contents.as_slice()).unwrap();
 }
 
 impl App {
@@ -120,7 +121,7 @@ impl App {
                             headers: HashMap::new(),
                             content_type: "text/css",
                             content_length: file.len(),
-                            contents: String::from_utf8_lossy(file.as_slice()).to_string(),
+                            contents: file,
                         };
                         print!("Request: {} {} {}", req.method, req.uri, req.http_version);
                         send(res, &stream);

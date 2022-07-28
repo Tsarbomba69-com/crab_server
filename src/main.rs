@@ -5,6 +5,6 @@ fn main() {
     let mut app: App = App::new();
     app.get("/", |req| -> Response { render("login") });
     app.start_server(8080, || -> () {
-        println!("Starting:{}", 8080);
+        println!("Starting server at PORT:{}", 8080);
     });
 }
