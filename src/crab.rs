@@ -25,7 +25,7 @@ pub struct Request<'a> {
 
 #[derive(Debug)]
 pub struct Response<'a> {
-    status_code: u8,
+    status_code: usize,
     reason_phrase: &'a str,
     headers: HashMap<String, String>,
     content_type: &'a str,
@@ -39,30 +39,53 @@ pub fn render(view: &str) -> Response {
     let path = env::current_dir().unwrap().join(current_dir);
     let html = fs::read_to_string(path).expect("Something went wrong reading the file");
 
-    let res: Response = Response {
+    Response {
         status_code: 200,
         reason_phrase: "Ok",
         headers: HashMap::new(),
         content_type: "text/plain",
         content_length: html.len(),
         contents: html,
-    };
+    }
+}
 
-    res
+fn get_file(uri: &str) -> Result<Vec<u8>, Error> {
+    // TODO: implement global read-only content-type list
+    let file_dir = format!("src\\static{}", uri);
+    let current_dir: &Path = Path::new(&file_dir);
+    let path = env::current_dir().unwrap().join(current_dir);
+    fs::read(path)
+}
+
+fn send(res: Response, mut stream: &TcpStream) {
+    let res_buffer = format!(
+        "HTTP/1.1 {} {}\r\nRequest: Content-Length: {}\r\n\r\n{}",
+        res.status_code,
+        res.reason_phrase,
+        res.content_length,
+        res.contents.as_str()
+    );
+
+    match stream.write_all(res_buffer.as_bytes()) {
+        Ok(()) => println!("\nResponse: {} {}", res.status_code, res.reason_phrase),
+        Err(e) => println!("Error: {}", e),
+    };
 }
 
 impl App {
-    pub fn new() -> App {
-        App {
-            routes: HashMap::new(),
-        }
+    fn generate_response() {
+        todo!();
+    }
+
+    pub fn get(&mut self, uri: &str, callback: fn(req: Request) -> Response) -> () {
+        self.routes.insert(format!("GET {}", uri), callback);
     }
 
     fn handle_connection(&self, mut stream: TcpStream) {
         let mut buffer = [0; 1024];
-        let mut request_line: String = String::new();
-        let mut body: String = String::new();
-        let mut headers: HashMap<String, String> = HashMap::new();
+        let request_line: String;
+        let body: String;
+        let headers: HashMap<String, String>;
 
         match stream.read(&mut buffer) {
             Ok(length) => println!("Content-Length: {}", length),
@@ -71,7 +94,9 @@ impl App {
 
         (headers, request_line, body) = App::parse_request(&buffer);
         let vec: Vec<&str> = request_line.split(" ").collect();
-
+        if vec.len() <= 1 {
+            return;
+        }
         let req: Request = Request {
             method: vec[0].clone(),
             uri: vec[1].clone(),
@@ -83,31 +108,49 @@ impl App {
         };
 
         let k = format!("{} {}", req.method, req.uri);
-        // TODO: handle serving static files 
+        // TODO: handle serving static files
         match self.routes.get(k.as_str()) {
-            None => println!("Not found!"),
+            None => {
+                let file = get_file(req.uri);
+                match file {
+                    Ok(file) => {
+                        let res = Response {
+                            status_code: 200,
+                            reason_phrase: "Ok",
+                            headers: HashMap::new(),
+                            content_type: "text/css",
+                            content_length: file.len(),
+                            contents: String::from_utf8_lossy(file.as_slice()).to_string(),
+                        };
+                        print!("Request: {} {} {}", req.method, req.uri, req.http_version);
+                        send(res, &stream);
+                    }
+                    Err(err) => println!("Not found!"),
+                }
+            }
             Some(callback) => {
                 let res = callback(req);
-                let res_buffer = format!(
-                    "{} {} {}\r\nRequest: Content-Length: {}\r\n\r\n{}",
-                    vec[2],
-                    res.status_code,
-                    res.reason_phrase,
-                    res.content_length,
-                    res.contents.as_str()
-                );
-
-                match stream.write_all(res_buffer.as_bytes()) {
-                    Ok(()) => println!(
-                        "Response: {} {} {} {}",
-                        vec[0], vec[1], res.status_code, res.reason_phrase
-                    ),
-                    Err(e) => println!("Error: {}", e),
-                };
+                print!("Request: {} {} {}", vec[0], vec[1], vec[2]);
+                send(res, &stream);
             }
         }
 
-        stream.flush();
+        match stream.flush() {
+            Ok(()) => (),
+            Err(e) => println!("Error: {}", e),
+        }
+    }
+
+    pub fn new() -> Self {
+        Self {
+            routes: HashMap::new(),
+        }
+    }
+
+    fn parse_body(body: String) -> HashMap<String, String> {
+        let mut _body: HashMap<String, String> = HashMap::new();
+        _body.insert(String::from("empty"), body);
+        _body
     }
 
     fn parse_request(buffer: &[u8]) -> (HashMap<String, String>, String, String) {
@@ -141,16 +184,6 @@ impl App {
         (headers, request_line, body.to_string())
     }
 
-    fn parse_body(body: String) -> HashMap<String, String> {
-        let mut _body: HashMap<String, String> = HashMap::new();
-        _body.insert(String::from("empty"), body);
-        _body
-    }
-
-    fn generate_response() {
-        todo!();
-    }
-
     pub fn start_server(&self, port: u16, callback: fn() -> ()) -> () {
         let listener: Result<TcpListener, Error> =
             TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port)));
@@ -168,9 +201,5 @@ impl App {
             }
             Err(e) => println!("ERROR: {:?}", e),
         }
-    }
-
-    pub fn get(&mut self, uri: &str, callback: fn(req: Request) -> Response) -> () {
-        self.routes.insert(format!("GET {}", uri), callback);
     }
 }
