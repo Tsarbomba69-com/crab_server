@@ -1,3 +1,5 @@
+use phf::phf_map;
+use phf::Map;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -7,13 +9,10 @@ use std::{
     io::Read,
     net::{SocketAddr, TcpListener, TcpStream},
 };
-use phf::Map;
-use phf::phf_map;
 
 pub struct App {
     routes: HashMap<String, fn(req: Request) -> Response>,
 }
-
 
 static CONTENT_TYPES: Map<&'static str, &str> = phf_map! {
     "css" => "text/css",
@@ -22,7 +21,6 @@ static CONTENT_TYPES: Map<&'static str, &str> = phf_map! {
     "html" => "text/html",
     "jpg" => "image/jpeg",
 };
-
 
 #[derive(Debug)]
 pub struct Request<'a> {
@@ -50,11 +48,15 @@ pub fn render(view: &str) -> Response {
     let current_dir: &Path = Path::new(&filename);
     let path = env::current_dir().unwrap().join(current_dir);
     let html = fs::read_to_string(path).expect("Something went wrong reading the file");
+    let headers: HashMap<String, String> =
+        vec![("Date".to_string(), chrono::Local::now().to_string())]
+            .into_iter()
+            .collect();
 
     Response {
         status_code: 200,
         reason_phrase: "Ok",
-        headers: HashMap::new(),
+        headers: headers,
         content_type: "text/html",
         content_length: html.len(),
         contents: html.into_bytes(),
@@ -70,12 +72,12 @@ fn get_file(uri: &str) -> Result<Vec<u8>, Error> {
 
 fn send(res: Response, mut stream: &TcpStream) -> () {
     let res_buffer = format!(
-        "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nContent-Type: {}
-        \r\n\r\n",
+        "HTTP/1.1 {} {}\r\n Content-Length: {}\r\n Content-Type: {}\r\n Date: {}\r\n\r\n",
         res.status_code,
         res.reason_phrase,
         res.content_length,
-        res.content_type
+        res.content_type,
+        res.headers.get(&"Date".to_string()).unwrap()
     );
 
     match stream.write_all(res_buffer.as_bytes()) {
@@ -130,10 +132,14 @@ impl App {
                 match file {
                     Ok(file) => {
                         let ext = Path::new(req.uri).extension().unwrap().to_str().unwrap();
+                        let headers: HashMap<String, String> =
+                            vec![("Date".to_string(), chrono::Local::now().to_string())]
+                                .into_iter()
+                                .collect();
                         let res = Response {
                             status_code: 200,
                             reason_phrase: "Ok",
-                            headers: HashMap::new(),
+                            headers: headers,
                             content_type: CONTENT_TYPES.get(ext).unwrap(),
                             content_length: file.len(),
                             contents: file,
