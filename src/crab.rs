@@ -7,10 +7,22 @@ use std::{
     io::Read,
     net::{SocketAddr, TcpListener, TcpStream},
 };
+use phf::Map;
+use phf::phf_map;
 
 pub struct App {
     routes: HashMap<String, fn(req: Request) -> Response>,
 }
+
+
+static CONTENT_TYPES: Map<&'static str, &str> = phf_map! {
+    "css" => "text/css",
+    "js" => "application/javascript",
+    "png" => "image/png",
+    "html" => "text/html",
+    "jpg" => "image/jpeg",
+};
+
 
 #[derive(Debug)]
 pub struct Request<'a> {
@@ -20,7 +32,7 @@ pub struct Request<'a> {
     content_type: &'a str,
     http_version: &'a str,
     body: HashMap<String, String>,
-    ip: &'a str,
+    hostname: &'a str,
 }
 
 #[derive(Debug)]
@@ -43,26 +55,27 @@ pub fn render(view: &str) -> Response {
         status_code: 200,
         reason_phrase: "Ok",
         headers: HashMap::new(),
-        content_type: "text/plain",
+        content_type: "text/html",
         content_length: html.len(),
         contents: html.into_bytes(),
     }
 }
 
 fn get_file(uri: &str) -> Result<Vec<u8>, Error> {
-    // TODO: implement global read-only content-type list
     let file_dir = format!("src\\static{}", uri);
     let current_dir: &Path = Path::new(&file_dir);
     let path = env::current_dir().unwrap().join(current_dir);
     fs::read(path)
 }
 
-fn send(res: Response, mut stream: &TcpStream) {
+fn send(res: Response, mut stream: &TcpStream) -> () {
     let res_buffer = format!(
-        "HTTP/1.1 {} {}\r\nRequest: Content-Length: {}\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nContent-Type: {}
+        \r\n\r\n",
         res.status_code,
         res.reason_phrase,
-        res.content_length
+        res.content_length,
+        res.content_type
     );
 
     match stream.write_all(res_buffer.as_bytes()) {
@@ -89,7 +102,7 @@ impl App {
         let headers: HashMap<String, String>;
 
         match stream.read(&mut buffer) {
-            Ok(length) => println!("Content-Length: {}", length),
+            Ok(length) => println!("request Length: {}", length),
             Err(e) => println!("Error: {}", e),
         };
 
@@ -98,6 +111,7 @@ impl App {
         if vec.len() <= 1 {
             return;
         }
+
         let req: Request = Request {
             method: vec[0].clone(),
             uri: vec[1].clone(),
@@ -105,21 +119,22 @@ impl App {
             headers: headers.clone(),
             body: App::parse_body(body),
             content_type: "",
-            ip: "127.0.0.1",
+            hostname: headers.get("Host").unwrap(),
         };
 
         let k = format!("{} {}", req.method, req.uri);
-        // TODO: handle serving static files
+
         match self.routes.get(k.as_str()) {
             None => {
                 let file = get_file(req.uri);
                 match file {
                     Ok(file) => {
+                        let ext = Path::new(req.uri).extension().unwrap().to_str().unwrap();
                         let res = Response {
                             status_code: 200,
                             reason_phrase: "Ok",
                             headers: HashMap::new(),
-                            content_type: "text/css",
+                            content_type: CONTENT_TYPES.get(ext).unwrap(),
                             content_length: file.len(),
                             contents: file,
                         };
