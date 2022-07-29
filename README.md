@@ -1,7 +1,10 @@
 # crab_server
-
+### Eng
 A web server built in Rust. The goal is to build a full fledged web framework, basically I'm rewriting the web server i made in C. Both the C version and this one, are
 heavily based on the Express framework for the Node runtime environment.
+
+### Pt
+Um servidor web construído em Rust. O objetivo é construir um framework web completo, basicamente estou reescrevendo o servidor web que fiz em C. Tanto a versão C quanto esta, são fortemente baseadas no framework Express para o ambiente de execução Node.
 
 ## Quick Start
 >
