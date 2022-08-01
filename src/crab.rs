@@ -1,5 +1,6 @@
 use phf::phf_map;
 use phf::Map;
+use tokio::io::AsyncReadExt;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -97,7 +98,7 @@ impl App {
         self.routes.insert(format!("GET {}", uri), callback);
     }
 
-    fn handle_connection(&self, mut stream: TcpStream) {
+    fn _handle_connection(&self, mut stream: TcpStream) {
         let mut buffer = [0; 1024];
         let request_line: String;
         let body: String;
@@ -206,7 +207,7 @@ impl App {
         (headers, request_line, body.to_string())
     }
 
-    pub fn start_server(&self, port: u16, callback: fn() -> ()) -> () {
+    pub fn _start_server(&self, port: u16, callback: fn() -> ()) -> () {
         let listener: Result<TcpListener, Error> =
             TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port)));
 
@@ -216,12 +217,32 @@ impl App {
 
                 for stream in listener.incoming() {
                     match stream {
-                        Ok(stream) => self.handle_connection(stream),
+                        Ok(stream) => self._handle_connection(stream),
                         Err(e) => println!("Error: {}", e),
                     }
                 }
             }
             Err(e) => println!("ERROR: {:?}", e),
         }
+    }
+
+    #[tokio::main]
+    pub async fn start_server(&self, port: u16, callback: fn() -> ()) -> std::io::Result<()> {
+        let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
+        callback();
+
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            self.handle_connection(stream).await;
+        }
+    }
+
+    /// . Async connection (not fully implemented yet)
+    pub async fn handle_connection(&self, mut stream: tokio::net::TcpStream) {
+        let mut buffer = [0; 1024];
+        let request_line: String;
+        let body: String;
+        let headers: HashMap<String, String>;
+        stream.read(&mut buffer);
     }
 }
