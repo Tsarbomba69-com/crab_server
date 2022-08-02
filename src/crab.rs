@@ -1,16 +1,13 @@
 use phf::phf_map;
 use phf::Map;
-use tokio::io::AsyncReadExt;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::io::{Error, Write};
 use std::path::Path;
-use std::{
-    io::Read,
-    net::{SocketAddr, TcpListener, TcpStream},
-};
-
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
+use tokio::net::{TcpListener, TcpStream};
+#[derive(Debug, Clone, PartialEq)]
 pub struct App {
     routes: HashMap<String, fn(req: Request) -> Response>,
 }
@@ -24,22 +21,22 @@ static CONTENT_TYPES: Map<&'static str, &str> = phf_map! {
 };
 
 #[derive(Debug)]
-pub struct Request<'a> {
-    method: &'a str,
-    uri: &'a str,
+pub struct Request {
+    method: String,
+    uri: String,
     headers: HashMap<String, String>,
-    content_type: &'a str,
-    http_version: &'a str,
+    content_type: String,
+    http_version: String,
     body: HashMap<String, String>,
-    hostname: &'a str,
+    hostname: String,
 }
 
 #[derive(Debug)]
-pub struct Response<'a> {
+pub struct Response {
     status_code: usize,
-    reason_phrase: &'a str,
+    reason_phrase: String,
     headers: HashMap<String, String>,
-    content_type: &'a str,
+    content_type: String,
     content_length: usize,
     contents: Vec<u8>,
 }
@@ -56,22 +53,22 @@ pub fn render(view: &str) -> Response {
 
     Response {
         status_code: 200,
-        reason_phrase: "Ok",
+        reason_phrase: String::from("Ok"),
         headers: headers,
-        content_type: "text/html",
+        content_type: String::from("text/html"),
         content_length: html.len(),
         contents: html.into_bytes(),
     }
 }
 
-fn get_file(uri: &str) -> Result<Vec<u8>, Error> {
+async fn get_file(uri: String) -> Result<Vec<u8>, tokio::io::Error> {
     let file_dir = format!("src\\static{}", uri);
     let current_dir: &Path = Path::new(&file_dir);
     let path = env::current_dir().unwrap().join(current_dir);
-    fs::read(path)
+    tokio::fs::read(path).await
 }
 
-fn send(res: Response, mut stream: &TcpStream) -> () {
+async fn send(res: Response, stream: &mut TcpStream) -> () {
     let res_buffer = format!(
         "HTTP/1.1 {} {}\r\n Content-Length: {}\r\n Content-Type: {}\r\n Date: {}\r\n\r\n",
         res.status_code,
@@ -81,12 +78,12 @@ fn send(res: Response, mut stream: &TcpStream) -> () {
         res.headers.get(&"Date".to_string()).unwrap()
     );
 
-    match stream.write_all(res_buffer.as_bytes()) {
+    match stream.write_all(res_buffer.as_bytes()).await {
         Ok(()) => println!("\nResponse: {} {}", res.status_code, res.reason_phrase),
         Err(e) => println!("Error: {}", e),
     };
 
-    stream.write_all(res.contents.as_slice()).unwrap();
+    stream.write_all(res.contents.as_slice()).await.unwrap();
 }
 
 impl App {
@@ -98,16 +95,12 @@ impl App {
         self.routes.insert(format!("GET {}", uri), callback);
     }
 
-    fn _handle_connection(&self, mut stream: TcpStream) {
-        let mut buffer = [0; 1024];
+    async fn handle_connection(&self, mut socket: TcpStream) -> () {
+        let mut buffer = [0u8; 1024];
         let request_line: String;
         let body: String;
         let headers: HashMap<String, String>;
-
-        match stream.read(&mut buffer) {
-            Ok(length) => println!("request Length: {}", length),
-            Err(e) => println!("Error: {}", e),
-        };
+        socket.read(&mut buffer).await.unwrap();
 
         (headers, request_line, body) = App::parse_request(&buffer);
         let vec: Vec<&str> = request_line.split(" ").collect();
@@ -116,51 +109,54 @@ impl App {
         }
 
         let req: Request = Request {
-            method: vec[0].clone(),
-            uri: vec[1].clone(),
-            http_version: vec[2].clone(),
+            method: vec[0].to_string().clone(),
+            uri: vec[1].to_string().clone(),
+            http_version: vec[2].to_string().clone(),
             headers: headers.clone(),
             body: App::parse_body(body),
-            content_type: "",
-            hostname: headers.get("Host").unwrap(),
+            content_type: String::from(""),
+            hostname: headers.get("Host").unwrap().clone(),
         };
 
         let k = format!("{} {}", req.method, req.uri);
-
-        match self.routes.get(k.as_str()) {
+        match self.routes.get(&k) {
             None => {
-                let file = get_file(req.uri);
+                let file = get_file(req.uri.clone()).await;
                 match file {
                     Ok(file) => {
-                        let ext = Path::new(req.uri).extension().unwrap().to_str().unwrap();
+                        let ext = Path::new(req.uri.as_str())
+                            .extension()
+                            .unwrap()
+                            .to_str()
+                            .unwrap();
                         let headers: HashMap<String, String> =
                             vec![("Date".to_string(), chrono::Local::now().to_string())]
                                 .into_iter()
                                 .collect();
                         let res = Response {
                             status_code: 200,
-                            reason_phrase: "Ok",
+                            reason_phrase: String::from("Ok"),
                             headers: headers,
-                            content_type: CONTENT_TYPES.get(ext).unwrap(),
+                            content_type: CONTENT_TYPES.get(ext).unwrap().to_string(),
                             content_length: file.len(),
                             contents: file,
                         };
                         print!("Request: {} {} {}", req.method, req.uri, req.http_version);
-                        send(res, &stream);
+                        send(res, &mut socket).await;
                     }
                     Err(err) => println!("Not found!"),
                 }
             }
             Some(callback) => {
+                let (method, uri, http_version) = (
+                    req.method.clone(),
+                    req.uri.clone(),
+                    req.http_version.clone(),
+                );
                 let res = callback(req);
-                print!("Request: {} {} {}", vec[0], vec[1], vec[2]);
-                send(res, &stream);
+                print!("Request: {} {} {}", method, uri, http_version);
+                send(res, &mut socket).await;
             }
-        }
-
-        match stream.flush() {
-            Ok(()) => (),
-            Err(e) => println!("Error: {}", e),
         }
     }
 
@@ -207,42 +203,20 @@ impl App {
         (headers, request_line, body.to_string())
     }
 
-    pub fn _start_server(&self, port: u16, callback: fn() -> ()) -> () {
-        let listener: Result<TcpListener, Error> =
-            TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port)));
-
-        match listener {
-            Ok(listener) => {
-                callback();
-
-                for stream in listener.incoming() {
-                    match stream {
-                        Ok(stream) => self._handle_connection(stream),
-                        Err(e) => println!("Error: {}", e),
-                    }
-                }
-            }
-            Err(e) => println!("ERROR: {:?}", e),
-        }
-    }
-
     #[tokio::main]
-    pub async fn start_server(&self, port: u16, callback: fn() -> ()) -> std::io::Result<()> {
-        let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port)).await?;
+    pub async fn start_server(self, port: u16, callback: fn() -> ()) {
         callback();
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
+            .await
+            .unwrap();
 
         loop {
-            let (stream, _) = listener.accept().await.unwrap();
-            self.handle_connection(stream).await;
-        }
-    }
+            let (socket, _) = listener.accept().await.unwrap();
+            let app = self.clone();
 
-    /// . Async connection (not fully implemented yet)
-    pub async fn handle_connection(&self, mut stream: tokio::net::TcpStream) {
-        let mut buffer = [0; 1024];
-        let request_line: String;
-        let body: String;
-        let headers: HashMap<String, String>;
-        stream.read(&mut buffer);
+            tokio::spawn(async move {
+                app.handle_connection(socket).await;
+            });
+        }
     }
 }
