@@ -3,6 +3,7 @@ use phf::Map;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
+
 use std::path::Path;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -27,7 +28,7 @@ pub struct Request {
     headers: HashMap<String, String>,
     content_type: String,
     http_version: String,
-    body: HashMap<String, String>,
+    pub body: HashMap<String, String>,
     hostname: String,
 }
 
@@ -55,7 +56,7 @@ pub fn render(view: &str) -> Response {
         status_code: 200,
         reason_phrase: String::from("Ok"),
         headers: headers,
-        content_type: String::from("text/html"),
+        content_type: String::from("text/html; charset=UTF-8"),
         content_length: html.len(),
         contents: html.into_bytes(),
     }
@@ -70,7 +71,7 @@ async fn get_file(uri: String) -> Result<Vec<u8>, tokio::io::Error> {
 
 async fn send(res: Response, stream: &mut TcpStream) -> () {
     let res_buffer = format!(
-        "HTTP/1.1 {} {}\r\n Content-Length: {}\r\n Content-Type: {}\r\n Date: {}\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nContent-Type: {}\r\nDate: {}\r\n\r\n",
         res.status_code,
         res.reason_phrase,
         res.content_length,
@@ -87,12 +88,12 @@ async fn send(res: Response, stream: &mut TcpStream) -> () {
 }
 
 impl App {
-    fn generate_response() {
-        todo!();
-    }
-
     pub fn get(&mut self, uri: &str, callback: fn(req: Request) -> Response) -> () {
         self.routes.insert(format!("GET {}", uri), callback);
+    }
+
+    pub fn post(&mut self, uri: &str, callback: fn(req: Request) -> Response) -> () {
+        self.routes.insert(format!("POST {}", uri), callback);
     }
 
     async fn handle_connection(&self, mut socket: TcpStream) -> () {
@@ -113,7 +114,7 @@ impl App {
             uri: vec[1].to_string().clone(),
             http_version: vec[2].to_string().clone(),
             headers: headers.clone(),
-            body: App::parse_body(body),
+            body: App::parse_body(headers.get("Content-Type").unwrap().as_str(), body),
             content_type: String::from(""),
             hostname: headers.get("Host").unwrap().clone(),
         };
@@ -166,10 +167,25 @@ impl App {
         }
     }
 
-    fn parse_body(body: String) -> HashMap<String, String> {
-        let mut _body: HashMap<String, String> = HashMap::new();
-        _body.insert(String::from("empty"), body);
-        _body
+    fn parse_body(content_type: &str, body: String) -> HashMap<String, String> {
+        if content_type.contains("application/x-www-form-urlencoded") {
+            let mut buffer = body.replace("\r\n\r\n", "");
+            buffer = buffer.trim_end_matches(char::from(0)).to_string();
+            let mut _body: HashMap<String, String> = HashMap::new();
+            let rows: Vec<&str> = buffer.split("&").collect();
+    
+            for row in rows {
+                let key_value: Vec<&str> = row.split("=").collect();
+                _body.insert(
+                    key_value.first().unwrap().to_string(),
+                    key_value.last().unwrap().to_string(),
+                );
+            }
+
+            return _body;
+        }
+
+        HashMap::new()
     }
 
     fn parse_request(buffer: &[u8]) -> (HashMap<String, String>, String, String) {
@@ -204,7 +220,7 @@ impl App {
     }
 
     #[tokio::main]
-    pub async fn start_server(self, port: u16, callback: fn() -> ()) {
+    pub async fn start_server(&self, port: u16, callback: fn() -> ()) {
         callback();
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
             .await
