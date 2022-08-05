@@ -1,13 +1,15 @@
 use phf::phf_map;
 use phf::Map;
+use serde_urlencoded::from_bytes;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-
+use std::io::Write;
 use std::path::Path;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
+use regex::Regex;
 #[derive(Debug, Clone, PartialEq)]
 pub struct App {
     routes: HashMap<String, fn(req: Request) -> Response>,
@@ -62,6 +64,22 @@ pub fn render(view: &str) -> Response {
     }
 }
 
+pub fn upload(file_string: &String, uri: &str) {
+    let re = Regex::new(r#""(.*?)""#).unwrap();
+    let caps = re.captures(file_string).unwrap();
+    let a = caps.get(0).unwrap().as_str();
+    let index: usize = file_string.find("\r\n\r\n").unwrap_or(0);
+    let blob = file_string
+        .get(index + 4..file_string.len())
+        .unwrap_or_default();
+    let file_dir = format!("src\\static{}", uri);
+    let current_dir: &Path = Path::new(&file_dir);
+    let path = env::current_dir().unwrap().join(current_dir);
+    if let Ok(mut file) = std::fs::File::create(path) {
+        file.write_all(blob.as_bytes()).unwrap();
+    }
+}
+
 async fn get_file(uri: String) -> Result<Vec<u8>, tokio::io::Error> {
     let file_dir = format!("src\\static{}", uri);
     let current_dir: &Path = Path::new(&file_dir);
@@ -97,22 +115,19 @@ impl App {
     }
 
     async fn handle_connection(&self, mut socket: TcpStream) -> () {
-        let mut buffer = [0u8; 1024];
-        let request_line: String;
-        let body: String;
-        let headers: HashMap<String, String>;
+        let mut buffer = [0u8; 8000];
         socket.read(&mut buffer).await.unwrap();
 
-        (headers, request_line, body) = App::parse_request(&buffer);
+        let (headers, request_line, body) = App::parse_request(&buffer);
         let vec: Vec<&str> = request_line.split(" ").collect();
         if vec.len() <= 1 {
             return;
         }
 
         let req: Request = Request {
-            method: vec[0].to_string().clone(),
-            uri: vec[1].to_string().clone(),
-            http_version: vec[2].to_string().clone(),
+            method: vec[0].to_string(),
+            uri: vec[1].to_string(),
+            http_version: vec[2].to_string(),
             headers: headers.clone(),
             body: App::parse_body(headers.get("Content-Type").unwrap().as_str(), body),
             content_type: String::from(""),
@@ -171,18 +186,8 @@ impl App {
         if content_type.contains("application/x-www-form-urlencoded") {
             let mut buffer = body.replace("\r\n\r\n", "");
             buffer = buffer.trim_end_matches(char::from(0)).to_string();
-            let mut _body: HashMap<String, String> = HashMap::new();
-            let rows: Vec<&str> = buffer.split("&").collect();
-    
-            for row in rows {
-                let key_value: Vec<&str> = row.split("=").collect();
-                _body.insert(
-                    key_value.first().unwrap().to_string(),
-                    key_value.last().unwrap().to_string(),
-                );
-            }
-
-            return _body;
+            let _body = from_bytes::<Vec<(String, String)>>(buffer.as_bytes()).unwrap();
+            return _body.into_iter().collect();
         }
 
         HashMap::new()
