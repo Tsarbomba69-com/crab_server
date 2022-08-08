@@ -1,7 +1,10 @@
+use futures_util::stream::once;
+use multer::bytes::Bytes;
 use phf::phf_map;
 use phf::Map;
 use serde_urlencoded::from_bytes;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -9,7 +12,6 @@ use std::path::Path;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
-use regex::Regex;
 #[derive(Debug, Clone, PartialEq)]
 pub struct App {
     routes: HashMap<String, fn(req: Request) -> Response>,
@@ -27,7 +29,7 @@ static CONTENT_TYPES: Map<&'static str, &str> = phf_map! {
 pub struct Request {
     method: String,
     uri: String,
-    headers: HashMap<String, String>,
+    pub headers: HashMap<String, String>,
     content_type: String,
     http_version: String,
     pub body: HashMap<String, String>,
@@ -65,18 +67,11 @@ pub fn render(view: &str) -> Response {
 }
 
 pub fn upload(file_string: &String, uri: &str) {
-    let re = Regex::new(r#""(.*?)""#).unwrap();
-    let caps = re.captures(file_string).unwrap();
-    let a = caps.get(0).unwrap().as_str();
-    let index: usize = file_string.find("\r\n\r\n").unwrap_or(0);
-    let blob = file_string
-        .get(index + 4..file_string.len())
-        .unwrap_or_default();
     let file_dir = format!("src\\static{}", uri);
     let current_dir: &Path = Path::new(&file_dir);
     let path = env::current_dir().unwrap().join(current_dir);
     if let Ok(mut file) = std::fs::File::create(path) {
-        file.write_all(blob.as_bytes()).unwrap();
+        file.write_all(file_string.as_bytes()).unwrap();
     }
 }
 
@@ -116,9 +111,9 @@ impl App {
 
     async fn handle_connection(&self, mut socket: TcpStream) -> () {
         let mut buffer = [0u8; 8000];
-        socket.read(&mut buffer).await.unwrap();
+        let size = socket.read(&mut buffer).await.unwrap();
 
-        let (headers, request_line, body) = App::parse_request(&buffer);
+        let (headers, request_line, body) = App::parse_request(&buffer, size);
         let vec: Vec<&str> = request_line.split(" ").collect();
         if vec.len() <= 1 {
             return;
@@ -129,7 +124,7 @@ impl App {
             uri: vec[1].to_string(),
             http_version: vec[2].to_string(),
             headers: headers.clone(),
-            body: App::parse_body(headers.get("Content-Type").unwrap().as_str(), body),
+            body: App::parse_body(headers.get("Content-Type"), body).await,
             content_type: String::from(""),
             hostname: headers.get("Host").unwrap().clone(),
         };
@@ -182,28 +177,64 @@ impl App {
         }
     }
 
-    fn parse_body(content_type: &str, body: String) -> HashMap<String, String> {
-        if content_type.contains("application/x-www-form-urlencoded") {
-            let mut buffer = body.replace("\r\n\r\n", "");
-            buffer = buffer.trim_end_matches(char::from(0)).to_string();
-            let _body = from_bytes::<Vec<(String, String)>>(buffer.as_bytes()).unwrap();
-            return _body.into_iter().collect();
+    async fn parse_body(content_type: Option<&String>, body: String) -> HashMap<String, String> {
+        match content_type {
+            Some(content_type) => {
+                let ct = content_type.as_str();
+                if ct.contains("application/x-www-form-urlencoded") {
+                    let buffer = body.replace("\r\n\r\n", "");
+                    let _body = from_bytes::<Vec<(String, String)>>(buffer.as_bytes()).unwrap();
+                    return _body.into_iter().collect();
+                }
+        
+                if ct.contains("multipart/form-data") {
+                    let boundary = multer::parse_boundary(ct).unwrap();
+                    let data = once(async move { Result::<Bytes, Infallible>::Ok(Bytes::from(body)) });
+                    let mut multipart = multer::Multipart::new(data, boundary);
+                    let mut _body: HashMap<String, String> = HashMap::new();
+        
+                    // Iterate over the fields, use `next_field()` to get the next field.
+                    while let Some(mut field) = multipart.next_field().await.unwrap() {
+                        // Get field name.
+                        let name = field.name().unwrap().to_string();
+                        // Get the field's filename if provided in "Content-Disposition" header.
+                        //
+                        // Process the field data chunks e.g. store them in a file.
+                        while let Some(chunk) = field.chunk().await.unwrap() {
+                            // Do something with field chunk.
+                            if let Some(file_name) = field.file_name() {
+                                let file_dir = format!("src\\static\\temp\\{}", file_name);
+                                let current_dir: &Path = Path::new(&file_dir);
+                                let path = env::current_dir().unwrap().join(current_dir);
+                                if let Ok(mut file) = std::fs::File::create(path) {
+                                    file.write_all(&chunk).unwrap();
+                                }
+                            } else {
+                                _body.insert(name.clone(), String::from_utf8(chunk.to_vec()).unwrap());
+                            }
+                        }
+                    }
+        
+                    return _body;
+                }
+        
+            },
+            None => return HashMap::new()
         }
 
         HashMap::new()
     }
 
-    fn parse_request(buffer: &[u8]) -> (HashMap<String, String>, String, String) {
-        let request_msg = String::from_utf8(buffer.to_vec()).unwrap();
+    fn parse_request(buffer: &[u8], size: usize) -> (HashMap<String, String>, String, String) {
+        let mut request_msg = String::from_utf8_lossy(&buffer[0..size]);
         let mut headers: HashMap<String, String> = HashMap::new();
         let request_line = request_msg.lines().nth(0).unwrap().to_string();
         let index: usize = request_msg.find("\r\n\r\n").unwrap_or(0);
-
         let body = request_msg
             .get(index..request_msg.len())
             .unwrap_or_default();
-
-        request_msg.lines().for_each(|line| {
+        let headers_section = request_msg.get(0..index).unwrap();
+        headers_section.lines().for_each(|line| {
             let _line: Vec<&str> = line.split(": ").collect();
             let k = _line.first().copied().unwrap().to_string();
             let v = _line.last().copied().unwrap().to_string();

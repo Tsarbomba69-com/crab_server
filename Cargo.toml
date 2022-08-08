@@ -10,5 +10,5 @@ phf = { version = "0.11", features = ["macros"] }
 chrono = "0.4.19"
 tokio = { version = "1.20.1", features = ["full"] }
 serde_urlencoded = "0.7.1"
-image = "0.24.3"
-regex = "1.6.0"
+multer = "2.0.3"
+futures-util = "0.3.21"
