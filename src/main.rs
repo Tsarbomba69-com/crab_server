@@ -5,8 +5,7 @@ fn main() {
     let mut app = App::new();
     app.get("/", |_req| -> Response { render("login") });
     app.post("/", |req| -> Response {
-        println!("body: {:?}", req.body);
-        upload(req.body.get("file").unwrap(), "\\imagem\\test1.txt");
+        println!("headers: {:?}, body: {:?}", req.headers, req.body);
         render("Login")
     });
     app.start_server(8080, || -> () {
