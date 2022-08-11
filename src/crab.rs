@@ -1,15 +1,11 @@
-use futures_util::stream::once;
-use multer::bytes::Bytes;
 use phf::phf_map;
 use phf::Map;
 use serde_urlencoded::from_bytes;
 use std::collections::HashMap;
-use std::convert::Infallible;
 use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
-use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 #[derive(Debug, Clone, PartialEq)]
@@ -110,11 +106,12 @@ impl App {
     }
 
     async fn handle_connection(&self, mut socket: TcpStream) -> () {
-        let mut buffer = [0u8; 8000];
-        let size = socket.read(&mut buffer).await.unwrap();
-
+        let mut buffer = Vec::with_capacity(8_000_000);
+        socket.readable().await.unwrap();
+        let size = socket.try_read_buf(&mut buffer).unwrap();
         let (headers, request_line, body) = App::parse_request(&buffer, size);
         let vec: Vec<&str> = request_line.split(" ").collect();
+
         if vec.len() <= 1 {
             return;
         }
@@ -181,18 +178,18 @@ impl App {
         match content_type {
             Some(content_type) => {
                 let ct = content_type.as_str();
+
                 if ct.contains("application/x-www-form-urlencoded") {
                     let buffer = body.replace("\r\n\r\n", "");
                     let _body = from_bytes::<Vec<(String, String)>>(buffer.as_bytes()).unwrap();
                     return _body.into_iter().collect();
                 }
-        
+
                 if ct.contains("multipart/form-data") {
                     let boundary = multer::parse_boundary(ct).unwrap();
-                    let data = once(async move { Result::<Bytes, Infallible>::Ok(Bytes::from(body)) });
-                    let mut multipart = multer::Multipart::new(data, boundary);
+                    let mut multipart = multer::Multipart::with_reader(body.as_bytes(), boundary);
                     let mut _body: HashMap<String, String> = HashMap::new();
-        
+
                     // Iterate over the fields, use `next_field()` to get the next field.
                     while let Some(mut field) = multipart.next_field().await.unwrap() {
                         // Get field name.
@@ -206,27 +203,29 @@ impl App {
                                 let file_dir = format!("src\\static\\temp\\{}", file_name);
                                 let current_dir: &Path = Path::new(&file_dir);
                                 let path = env::current_dir().unwrap().join(current_dir);
-                                if let Ok(mut file) = std::fs::File::create(path) {
-                                    file.write_all(&chunk).unwrap();
+                                if let Ok(mut file) = tokio::fs::File::create(path).await {
+                                    file.write(&chunk).await.unwrap();
                                 }
                             } else {
-                                _body.insert(name.clone(), String::from_utf8(chunk.to_vec()).unwrap());
+                                _body.insert(
+                                    name.clone(),
+                                    String::from_utf8(chunk.to_vec()).unwrap(),
+                                );
                             }
                         }
                     }
-        
+
                     return _body;
                 }
-        
-            },
-            None => return HashMap::new()
+            }
+            None => return HashMap::new(),
         }
 
         HashMap::new()
     }
 
     fn parse_request(buffer: &[u8], size: usize) -> (HashMap<String, String>, String, String) {
-        let mut request_msg = String::from_utf8_lossy(&buffer[0..size]);
+        let request_msg = String::from_utf8_lossy(&buffer[0..size]);
         let mut headers: HashMap<String, String> = HashMap::new();
         let request_line = request_msg.lines().nth(0).unwrap().to_string();
         let index: usize = request_msg.find("\r\n\r\n").unwrap_or(0);
