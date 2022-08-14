@@ -4,7 +4,6 @@ use serde_urlencoded::from_bytes;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -43,7 +42,7 @@ pub struct Response {
 }
 
 pub fn render(view: &str) -> Response {
-    let filename = format!("src\\static\\HTML\\{}.html", view);
+    let filename = format!("static\\HTML\\{}.html", view);
     let current_dir: &Path = Path::new(&filename);
     let path = env::current_dir().unwrap().join(current_dir);
     let html = fs::read_to_string(path).expect("Something went wrong reading the file");
@@ -62,14 +61,14 @@ pub fn render(view: &str) -> Response {
     }
 }
 
-pub fn upload(file_string: &String, uri: &str) {
-    let file_dir = format!("src\\static{}", uri);
-    let current_dir: &Path = Path::new(&file_dir);
-    let path = env::current_dir().unwrap().join(current_dir);
-    if let Ok(mut file) = std::fs::File::create(path) {
-        file.write_all(file_string.as_bytes()).unwrap();
-    }
-}
+// pub fn upload(file_string: &String, uri: &str) {
+//     let file_dir = format!("src\\static{}", uri);
+//     let current_dir: &Path = Path::new(&file_dir);
+//     let path = env::current_dir().unwrap().join(current_dir);
+//     if let Ok(mut file) = std::fs::File::create(path) {
+//         file.write_all(file_string.as_bytes()).unwrap();
+//     }
+// }
 
 async fn get_file(uri: String) -> Result<Vec<u8>, tokio::io::Error> {
     let file_dir = format!("src\\static{}", uri);
@@ -152,7 +151,7 @@ impl App {
                         print!("Request: {} {} {}", req.method, req.uri, req.http_version);
                         send(res, &mut socket).await;
                     }
-                    Err(err) => println!("Not found!"),
+                    Err(_err) => println!("Not found!"),
                 }
             }
             Some(callback) => {
@@ -194,19 +193,22 @@ impl App {
                     while let Some(mut field) = multipart.next_field().await.unwrap() {
                         // Get field name.
                         let name = field.name().unwrap().to_string();
-                        // Get the field's filename if provided in "Content-Disposition" header.
-                        //
-                        // Process the field data chunks e.g. store them in a file.
-                        while let Some(chunk) = field.chunk().await.unwrap() {
-                            // Do something with field chunk.
-                            if let Some(file_name) = field.file_name() {
-                                let file_dir = format!("src\\static\\temp\\{}", file_name);
-                                let current_dir: &Path = Path::new(&file_dir);
-                                let path = env::current_dir().unwrap().join(current_dir);
-                                if let Ok(mut file) = tokio::fs::File::create(path).await {
-                                    file.write(&chunk).await.unwrap();
-                                }
-                            } else {
+
+                        //1. Get the field's filename if provided in "Content-Disposition" header.
+                        if let Some(file_name) = field.file_name() {
+                            //2. If there is a file then create a temp file
+                            let ext = Path::new(file_name).extension().unwrap().to_str().unwrap();
+                            let file_dir = format!("static\\temp\\temp_1.{}", ext); // TODO: generate file number
+                            let current_dir: &Path = Path::new(&file_dir);
+                            let path = env::current_dir().unwrap().join(current_dir);
+                            let mut file = tokio::fs::File::create(path).await.unwrap();
+                            //3. Foreach chunk, write to temp file
+                            while let Some(chunk) = field.chunk().await.unwrap() {
+                                file.write(&chunk[..]).await.unwrap();
+                            }
+                        } else {
+                            //3.1. Create a key-value pair for body hash map
+                            while let Some(chunk) = field.chunk().await.unwrap() {
                                 _body.insert(
                                     name.clone(),
                                     String::from_utf8(chunk.to_vec()).unwrap(),

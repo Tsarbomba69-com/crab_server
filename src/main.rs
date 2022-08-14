@@ -1,5 +1,5 @@
 mod crab;
-use crab::{render, upload, App, Response};
+use crab::{render, App, Response};
 
 fn main() {
     let mut app = App::new();
