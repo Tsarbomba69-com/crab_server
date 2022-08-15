@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 #[derive(Debug, Clone, PartialEq)]
@@ -198,7 +199,11 @@ impl App {
                         if let Some(file_name) = field.file_name() {
                             //2. If there is a file then create a temp file
                             let ext = Path::new(file_name).extension().unwrap().to_str().unwrap();
-                            let file_dir = format!("static\\temp\\temp_1.{}", ext); // TODO: generate file number
+                            let time = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis();
+                            let file_dir = format!("static\\temp\\temp_{}.{}", time, ext);
                             let current_dir: &Path = Path::new(&file_dir);
                             let path = env::current_dir().unwrap().join(current_dir);
                             let mut file = tokio::fs::File::create(path).await.unwrap();
