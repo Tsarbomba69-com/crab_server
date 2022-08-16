@@ -5,7 +5,7 @@ fn main() {
     let mut app = App::new();
     app.get("/", |_req| -> Response { render("login") });
     app.post("/", |req| -> Response {
-        println!("headers: {:?}, body: {:?}", req.headers, req.body);
+        println!("headers: {:#?}, \nbody: {:#?}", req.headers, req.body);
         render("Login")
     });
     app.start_server(8080, || -> () {

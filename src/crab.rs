@@ -72,7 +72,7 @@ pub fn render(view: &str) -> Response {
 // }
 
 async fn get_file(uri: String) -> Result<Vec<u8>, tokio::io::Error> {
-    let file_dir = format!("src\\static{}", uri);
+    let file_dir = format!("static{}", uri);
     let current_dir: &Path = Path::new(&file_dir);
     let path = env::current_dir().unwrap().join(current_dir);
     tokio::fs::read(path).await
@@ -206,7 +206,13 @@ impl App {
                             let file_dir = format!("static\\temp\\temp_{}.{}", time, ext);
                             let current_dir: &Path = Path::new(&file_dir);
                             let path = env::current_dir().unwrap().join(current_dir);
-                            let mut file = tokio::fs::File::create(path).await.unwrap();
+                            let mut file = tokio::fs::OpenOptions::new()
+                                .append(true)
+                                .create(true)
+                                .write(true)
+                                .open(path)
+                                .await
+                                .unwrap();
                             //3. Foreach chunk, write to temp file
                             while let Some(chunk) = field.chunk().await.unwrap() {
                                 file.write(&chunk[..]).await.unwrap();
